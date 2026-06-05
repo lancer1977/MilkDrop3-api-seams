@@ -603,6 +603,7 @@ public:
 	    void		BuildMenus();
         void        SetMenusForPresetVersion(int WarpPSVersion, int CompPSVersion);
 	    //void  ResetWindowSizeOnDisk();
+	    bool		HandleApiCopyData(COPYDATASTRUCT* pCopyData);
 	    bool		LaunchSprite(int nSpriteNum, int nSlot);
 	    void		KillSprite(int iSlot);
         void        DoCustomSoundAnalysis();

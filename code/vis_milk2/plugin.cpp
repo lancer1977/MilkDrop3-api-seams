@@ -503,7 +503,67 @@ Order of Function Calls
 #include <process.h>  // for beginthread, etc.
 #include <shellapi.h>
 #include <strsafe.h>
+#include <stdlib.h>
+#include <wchar.h>
 #include "AutoCharFn.h"
+
+static std::wstring TrimApiValue(const std::wstring& value)
+{
+    size_t first = value.find_first_not_of(L" \t");
+    if (first == std::wstring::npos)
+        return L"";
+
+    size_t last = value.find_last_not_of(L" \t");
+    return value.substr(first, last - first + 1);
+}
+
+static bool ApiGetValue(const std::wstring& payload, const wchar_t* key, std::wstring& value)
+{
+    size_t offset = 0;
+    while (offset < payload.length())
+    {
+        size_t lineEnd = payload.find_first_of(L"\r\n", offset);
+        std::wstring line = payload.substr(offset, lineEnd == std::wstring::npos ? std::wstring::npos : lineEnd - offset);
+
+        size_t equals = line.find(L'=');
+        if (equals != std::wstring::npos)
+        {
+            std::wstring lineKey = TrimApiValue(line.substr(0, equals));
+            if (_wcsicmp(lineKey.c_str(), key) == 0)
+            {
+                value = TrimApiValue(line.substr(equals + 1));
+                return true;
+            }
+        }
+
+        if (lineEnd == std::wstring::npos)
+            break;
+
+        offset = lineEnd + 1;
+        while (offset < payload.length() && (payload[offset] == L'\r' || payload[offset] == L'\n'))
+            offset++;
+    }
+
+    return false;
+}
+
+static int ApiGetIntValue(const std::wstring& payload, const wchar_t* key, int defaultValue)
+{
+    std::wstring value;
+    if (!ApiGetValue(payload, key, value))
+        return defaultValue;
+
+    return _wtoi(value.c_str());
+}
+
+static float ApiGetFloatValue(const std::wstring& payload, const wchar_t* key, float defaultValue)
+{
+    std::wstring value;
+    if (!ApiGetValue(payload, key, value))
+        return defaultValue;
+
+    return (float)_wtof(value.c_str());
+}
 
 #define FRAND ((rand() % 7381)/7380.0f)
 
@@ -5166,6 +5226,9 @@ LRESULT CPlugin::MyWindowProc(HWND hWnd, unsigned uMsg, WPARAM wParam, LPARAM lP
 
     switch (uMsg)
     {
+    case WM_COPYDATA:
+        return HandleApiCopyData((COPYDATASTRUCT*)lParam) ? TRUE : FALSE;
+
     case WM_COMMAND:
 
     case WM_CHAR:   // plain & simple alphanumeric keys
@@ -8562,6 +8625,63 @@ void CPlugin::LaunchSongTitleAnim()
 	m_supertext.nColorB     = 255;
 
 	m_supertext.fStartTime = GetTime();
+}
+
+bool CPlugin::HandleApiCopyData(COPYDATASTRUCT* pCopyData)
+{
+    if (!pCopyData || !pCopyData->lpData || pCopyData->cbData < sizeof(wchar_t))
+        return false;
+
+    const wchar_t* rawPayload = (const wchar_t*)pCopyData->lpData;
+    size_t payloadChars = pCopyData->cbData / sizeof(wchar_t);
+    if (payloadChars > 0 && rawPayload[payloadChars - 1] == L'\0')
+        payloadChars--;
+
+    std::wstring payload(rawPayload, payloadChars);
+    std::wstring command;
+    if (!ApiGetValue(payload, L"command", command))
+        return false;
+
+    if (_wcsicmp(command.c_str(), L"launch_sprite") == 0 || _wcsicmp(command.c_str(), L"sprite") == 0)
+    {
+        int sprite = ApiGetIntValue(payload, L"sprite", -1);
+        int slot = ApiGetIntValue(payload, L"slot", -1);
+
+        if (sprite < 0 || sprite > 99)
+            return false;
+
+        return LaunchSprite(sprite, slot);
+    }
+
+    if (_wcsicmp(command.c_str(), L"kill_sprite") == 0 || _wcsicmp(command.c_str(), L"sprite_kill") == 0)
+    {
+        int slot = ApiGetIntValue(payload, L"slot", -1);
+        if (slot < 0 || slot >= NUM_TEX)
+            return false;
+
+        KillSprite(slot);
+        return true;
+    }
+
+    if (_wcsicmp(command.c_str(), L"load_preset") == 0)
+    {
+        std::wstring path;
+        if (!ApiGetValue(payload, L"path", path) || path.length() == 0)
+            return false;
+
+        float blend = ApiGetFloatValue(payload, L"blend", m_fBlendTimeUser);
+        LoadPreset(path.c_str(), blend);
+        return true;
+    }
+
+    if (_wcsicmp(command.c_str(), L"random_preset") == 0)
+    {
+        float blend = ApiGetFloatValue(payload, L"blend", m_fBlendTimeUser);
+        LoadRandomPreset(blend);
+        return true;
+    }
+
+    return false;
 }
 
 bool CPlugin::LaunchSprite(int nSpriteNum, int nSlot)
