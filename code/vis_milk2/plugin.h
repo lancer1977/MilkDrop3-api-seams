@@ -559,7 +559,7 @@ public:
         void        LoadPerFrameEvallibVars(CState* pState);
         void        LoadCustomWavePerFrameEvallibVars(CState* pState, int i);
         void        LoadCustomShapePerFrameEvallibVars(CState* pState, int i, int instance);
-    	void		WriteRealtimeConfig();	// called on Finish()
+        void        WriteRealtimeConfig(); // called on Finish()
 	    void		dumpmsg(wchar_t *s);
 	    void		Randomize();
 	    void		LoadRandomPreset(float fBlendTime);
@@ -603,7 +603,7 @@ public:
 	    void		BuildMenus();
         void        SetMenusForPresetVersion(int WarpPSVersion, int CompPSVersion);
 	    //void  ResetWindowSizeOnDisk();
-	    bool		HandleApiCopyData(COPYDATASTRUCT* pCopyData);
+	    bool		HandleApiCopyData(HWND sourceHwnd, HWND senderHwnd, COPYDATASTRUCT* pCopyData);
 	    bool		LaunchSprite(int nSpriteNum, int nSlot);
 	    void		KillSprite(int iSlot);
         void        DoCustomSoundAnalysis();

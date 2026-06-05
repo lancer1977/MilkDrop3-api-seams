@@ -2,7 +2,7 @@
 
 - How to download and install : https://youtu.be/OQdZFlOHe5o<br/>
 - How to create a double-preset : https://youtu.be/AdcUPpp1O0k<br/>
-- Fork API seam notes: [docs/api-seams.md](docs/api-seams.md)<br/>
+- Fork API seam notes: [docs/api-seams.md](docs/api-seams.md) — implemented WM_COPYDATA commands, planned roadmap items, and validation caveats.<br/>
 
 <img align="left" width="300" height="316" src="https://github.com/milkdrop2077/MilkDrop3/raw/main/MilkDrop326a.jpg">
 <img  width="300" height="316" src="https://github.com/milkdrop2077/MilkDrop3/raw/main/MilkDrop326b.jpg">

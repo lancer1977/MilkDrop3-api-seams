@@ -506,6 +506,8 @@ Order of Function Calls
 #include <stdlib.h>
 #include <wchar.h>
 #include "AutoCharFn.h"
+#include <errno.h>
+#include <limits.h>
 
 static std::wstring TrimApiValue(const std::wstring& value)
 {
@@ -547,22 +549,482 @@ static bool ApiGetValue(const std::wstring& payload, const wchar_t* key, std::ws
     return false;
 }
 
-static int ApiGetIntValue(const std::wstring& payload, const wchar_t* key, int defaultValue)
+static bool ApiTryParseIntValue(const std::wstring& value, int* outValue)
 {
-    std::wstring value;
-    if (!ApiGetValue(payload, key, value))
-        return defaultValue;
+    if (!outValue || value.length() == 0)
+        return false;
 
-    return _wtoi(value.c_str());
+    const wchar_t* begin = value.c_str();
+    wchar_t* end = NULL;
+    errno = 0;
+
+    long parsed = wcstol(begin, &end, 0);
+    if (begin == end || errno == ERANGE)
+        return false;
+
+    while (end && (*end == L' ' || *end == L'\t'))
+        end++;
+
+    if (!end || *end != L'\0' || parsed < INT_MIN || parsed > INT_MAX)
+        return false;
+
+    *outValue = (int)parsed;
+    return true;
 }
 
-static float ApiGetFloatValue(const std::wstring& payload, const wchar_t* key, float defaultValue)
+static bool ApiTryParseFloatValue(const std::wstring& value, float* outValue)
 {
-    std::wstring value;
-    if (!ApiGetValue(payload, key, value))
-        return defaultValue;
+    if (!outValue || value.length() == 0)
+        return false;
 
-    return (float)_wtof(value.c_str());
+    const wchar_t* begin = value.c_str();
+    wchar_t* end = NULL;
+    errno = 0;
+
+    double parsed = wcstod(begin, &end);
+    if (begin == end || errno == ERANGE)
+        return false;
+
+    while (end && (*end == L' ' || *end == L'\t'))
+        end++;
+
+    if (!end || *end != L'\0')
+        return false;
+
+    *outValue = (float)parsed;
+    return true;
+}
+
+static bool ApiTryParseBoolValue(const std::wstring& value, bool* outValue)
+{
+    if (!outValue)
+        return false;
+
+    if (_wcsicmp(value.c_str(), L"true") == 0 || _wcsicmp(value.c_str(), L"yes") == 0 || _wcsicmp(value.c_str(), L"on") == 0)
+    {
+        *outValue = true;
+        return true;
+    }
+
+    if (_wcsicmp(value.c_str(), L"false") == 0 || _wcsicmp(value.c_str(), L"no") == 0 || _wcsicmp(value.c_str(), L"off") == 0)
+    {
+        *outValue = false;
+        return true;
+    }
+
+    int parsed = 0;
+    if (!ApiTryParseIntValue(value, &parsed))
+        return false;
+
+    *outValue = (parsed != 0);
+    return true;
+}
+
+static bool ApiTryReadIntField(const std::wstring& payload, const wchar_t* const* keys, int keyCount, int* outValue, bool* found)
+{
+    if (found)
+        *found = false;
+
+    if (!keys || keyCount <= 0 || !outValue)
+        return false;
+
+    for (int i = 0; i < keyCount; ++i)
+    {
+        std::wstring value;
+        if (!ApiGetValue(payload, keys[i], value))
+            continue;
+
+        if (found)
+            *found = true;
+
+        return ApiTryParseIntValue(value, outValue);
+    }
+
+    return true;
+}
+
+static bool ApiTryReadFloatField(const std::wstring& payload, const wchar_t* const* keys, int keyCount, float* outValue, bool* found)
+{
+    if (found)
+        *found = false;
+
+    if (!keys || keyCount <= 0 || !outValue)
+        return false;
+
+    for (int i = 0; i < keyCount; ++i)
+    {
+        std::wstring value;
+        if (!ApiGetValue(payload, keys[i], value))
+            continue;
+
+        if (found)
+            *found = true;
+
+        return ApiTryParseFloatValue(value, outValue);
+    }
+
+    return true;
+}
+
+static bool ApiTryReadBoolField(const std::wstring& payload, const wchar_t* const* keys, int keyCount, bool* outValue, bool* found)
+{
+    if (found)
+        *found = false;
+
+    if (!keys || keyCount <= 0 || !outValue)
+        return false;
+
+    for (int i = 0; i < keyCount; ++i)
+    {
+        std::wstring value;
+        if (!ApiGetValue(payload, keys[i], value))
+            continue;
+
+        if (found)
+            *found = true;
+
+        return ApiTryParseBoolValue(value, outValue);
+    }
+
+    return true;
+}
+
+static bool ApiTryReadStringField(const std::wstring& payload, const wchar_t* const* keys, int keyCount, std::wstring* outValue, bool* found)
+{
+    if (found)
+        *found = false;
+
+    if (!keys || keyCount <= 0 || !outValue)
+        return false;
+
+    for (int i = 0; i < keyCount; ++i)
+    {
+        if (!ApiGetValue(payload, keys[i], *outValue))
+            continue;
+
+        if (found)
+            *found = true;
+
+        return true;
+    }
+
+    outValue->clear();
+    return true;
+}
+
+static bool ApiValidateSpriteSlot(int slot)
+{
+    return slot == -1 || (slot >= 0 && slot < NUM_TEX);
+}
+
+static bool ApiValidateBlend(float blend)
+{
+    return blend >= 0.0f && blend <= 60.0f;
+}
+
+static void ApiMaybeSetTexVar(double* var, double value, bool hasValue)
+{
+    if (hasValue && var)
+        *var = value;
+}
+
+static int ApiFindLiveSpriteSlot(CPlugin* plugin, int sprite)
+{
+    if (!plugin)
+        return -1;
+
+    for (int slot = 0; slot < NUM_TEX; ++slot)
+    {
+        if (plugin->m_texmgr.m_tex[slot].pSurface && plugin->m_texmgr.m_tex[slot].nUserData == sprite)
+            return slot;
+    }
+
+    return -1;
+}
+
+static bool ApiIsAbsoluteWindowsPath(const std::wstring& path)
+{
+    return (path.length() >= 2 && path[1] == L':') || (!path.empty() && (path[0] == L'\\' || path[0] == L'/'));
+}
+
+static std::wstring ApiJsonEscape(const std::wstring& value)
+{
+    std::wstring out;
+    out.reserve(value.length() + 8);
+
+    for (size_t i = 0; i < value.length(); ++i)
+    {
+        wchar_t ch = value[i];
+        switch (ch)
+        {
+        case L'\\': out += L"\\\\"; break;
+        case L'\"': out += L"\\\""; break;
+        case L'\b': out += L"\\b"; break;
+        case L'\f': out += L"\\f"; break;
+        case L'\n': out += L"\\n"; break;
+        case L'\r': out += L"\\r"; break;
+        case L'\t': out += L"\\t"; break;
+        default:
+            if (ch < 0x20)
+            {
+                wchar_t buf[8];
+                swprintf(buf, L"\\u%04x", (unsigned int)ch & 0xffff);
+                out += buf;
+            }
+            else
+            {
+                out.push_back(ch);
+            }
+            break;
+        }
+    }
+
+    return out;
+}
+
+static void ApiJsonAppendField(std::wstring& out, bool& first, const wchar_t* key, const std::wstring& value)
+{
+    if (!first)
+        out.push_back(L',');
+    first = false;
+    out.push_back(L'"');
+    out += key;
+    out += L"\":\"";
+    out += ApiJsonEscape(value);
+    out.push_back(L'\"');
+}
+
+static void ApiJsonAppendField(std::wstring& out, bool& first, const wchar_t* key, int value)
+{
+    if (!first)
+        out.push_back(L',');
+    first = false;
+    out.push_back(L'"');
+    out += key;
+    out += L"\":";
+    wchar_t buf[32];
+    swprintf(buf, L"%d", value);
+    out += buf;
+}
+
+static void ApiJsonAppendField(std::wstring& out, bool& first, const wchar_t* key, bool value)
+{
+    if (!first)
+        out.push_back(L',');
+    first = false;
+    out.push_back(L'"');
+    out += key;
+    out += L"\":";
+    out += value ? L"true" : L"false";
+}
+
+static void ApiJsonAppendField(std::wstring& out, bool& first, const wchar_t* key, double value)
+{
+    if (!first)
+        out.push_back(L',');
+    first = false;
+    out.push_back(L'"');
+    out += key;
+    out += L"\":";
+    wchar_t buf[64];
+    swprintf(buf, L"%.6f", value);
+    out += buf;
+}
+
+static bool ApiResolvePresetPath(CPlugin* plugin, const std::wstring& rawPath, std::wstring* resolvedPath, int* resolvedIndex)
+{
+    if (resolvedPath)
+        resolvedPath->clear();
+    if (resolvedIndex)
+        *resolvedIndex = -1;
+
+    if (!plugin || rawPath.empty())
+        return false;
+
+    if (GetFileAttributesW(rawPath.c_str()) != 0xFFFFFFFF)
+    {
+        if (resolvedPath)
+            *resolvedPath = rawPath;
+        return true;
+    }
+
+    const wchar_t* rawBase = wcsrchr(rawPath.c_str(), L'\\');
+    rawBase = rawBase ? rawBase + 1 : rawPath.c_str();
+
+    for (int i = plugin->m_nDirs; i < plugin->m_nPresets; ++i)
+    {
+        const std::wstring& presetName = plugin->m_presets[i].szFilename;
+        if (presetName.empty() || presetName[0] == L'*')
+            continue;
+
+        if (_wcsicmp(presetName.c_str(), rawPath.c_str()) == 0 || _wcsicmp(presetName.c_str(), rawBase) == 0)
+        {
+            std::wstring combined = plugin->m_szPresetDir;
+            combined += presetName;
+            if (resolvedPath)
+                *resolvedPath = combined;
+            if (resolvedIndex)
+                *resolvedIndex = i;
+            return true;
+        }
+    }
+
+    if (!ApiIsAbsoluteWindowsPath(rawPath))
+    {
+        std::wstring combined = plugin->m_szPresetDir;
+        combined += rawPath;
+        if (GetFileAttributesW(combined.c_str()) != 0xFFFFFFFF)
+        {
+            if (resolvedPath)
+                *resolvedPath = combined;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static std::wstring ApiBuildPresetStatusDetail(CPlugin* plugin)
+{
+    std::wstring json = L"{";
+    bool first = true;
+
+    ApiJsonAppendField(json, first, L"kind", L"preset_status");
+    ApiJsonAppendField(json, first, L"list_ready", plugin && plugin->m_bPresetListReady);
+    ApiJsonAppendField(json, first, L"loading_preset", plugin && plugin->m_nLoadingPreset > 0);
+    ApiJsonAppendField(json, first, L"preset_count", plugin ? plugin->m_nPresets : 0);
+    ApiJsonAppendField(json, first, L"dir_count", plugin ? plugin->m_nDirs : 0);
+    ApiJsonAppendField(json, first, L"current_index", (plugin && plugin->m_nCurrentPreset >= 0 && plugin->m_nCurrentPreset < plugin->m_nPresets) ? plugin->m_nCurrentPreset : -1);
+    ApiJsonAppendField(json, first, L"current_list_index", (plugin && plugin->m_nPresetListCurPos >= 0 && plugin->m_nPresetListCurPos < plugin->m_nPresets) ? plugin->m_nPresetListCurPos : -1);
+    ApiJsonAppendField(json, first, L"current_name", plugin && plugin->m_nCurrentPreset >= 0 && plugin->m_nCurrentPreset < plugin->m_nPresets ? plugin->m_presets[plugin->m_nCurrentPreset].szFilename : std::wstring());
+    ApiJsonAppendField(json, first, L"current_file", plugin ? std::wstring(plugin->m_szCurrentPresetFile) : std::wstring());
+    ApiJsonAppendField(json, first, L"preset_dir", plugin ? std::wstring(plugin->m_szPresetDir) : std::wstring());
+    ApiJsonAppendField(json, first, L"history_pos", plugin ? plugin->m_presetHistoryPos : 0);
+    ApiJsonAppendField(json, first, L"history_back_fence", plugin ? plugin->m_presetHistoryBackFence : 0);
+    ApiJsonAppendField(json, first, L"history_fwd_fence", plugin ? plugin->m_presetHistoryFwdFence : 0);
+
+    json.push_back(L'}');
+    return json;
+}
+
+static std::wstring ApiBuildPresetListDetail(CPlugin* plugin, int startIndex, int limit)
+{
+    std::wstring json = L"{";
+    bool first = true;
+
+    if (!plugin)
+    {
+        ApiJsonAppendField(json, first, L"kind", L"preset_list");
+        ApiJsonAppendField(json, first, L"list_ready", false);
+        ApiJsonAppendField(json, first, L"start", 0);
+        ApiJsonAppendField(json, first, L"limit", 0);
+        ApiJsonAppendField(json, first, L"total", 0);
+        json += L",\"entries\":[]}";
+        return json;
+    }
+
+    if (startIndex < 0)
+        startIndex = 0;
+    if (startIndex > plugin->m_nPresets)
+        startIndex = plugin->m_nPresets;
+    if (limit < 1)
+        limit = 1;
+    if (limit > 32)
+        limit = 32;
+
+    int endIndex = startIndex + limit;
+    if (endIndex > plugin->m_nPresets)
+        endIndex = plugin->m_nPresets;
+
+    ApiJsonAppendField(json, first, L"kind", L"preset_list");
+    ApiJsonAppendField(json, first, L"list_ready", plugin->m_bPresetListReady);
+    ApiJsonAppendField(json, first, L"start", startIndex);
+    ApiJsonAppendField(json, first, L"limit", limit);
+    ApiJsonAppendField(json, first, L"total", plugin->m_nPresets);
+    ApiJsonAppendField(json, first, L"dir_count", plugin->m_nDirs);
+    ApiJsonAppendField(json, first, L"current_index", (plugin->m_nCurrentPreset >= 0 && plugin->m_nCurrentPreset < plugin->m_nPresets) ? plugin->m_nCurrentPreset : -1);
+    ApiJsonAppendField(json, first, L"current_list_index", (plugin->m_nPresetListCurPos >= 0 && plugin->m_nPresetListCurPos < plugin->m_nPresets) ? plugin->m_nPresetListCurPos : -1);
+
+    json += L",\"entries\":[";
+    bool firstEntry = true;
+    for (int i = startIndex; i < endIndex; ++i)
+    {
+        if (!firstEntry)
+            json.push_back(L',');
+        firstEntry = false;
+
+        const std::wstring& entryName = plugin->m_presets[i].szFilename;
+        bool isDir = (!entryName.empty() && entryName[0] == L'*');
+
+        json += L"{";
+        bool entryFirst = true;
+        ApiJsonAppendField(json, entryFirst, L"index", i);
+        ApiJsonAppendField(json, entryFirst, L"name", entryName);
+        ApiJsonAppendField(json, entryFirst, L"kind", isDir ? L"directory" : L"preset");
+        ApiJsonAppendField(json, entryFirst, L"running", i == plugin->m_nCurrentPreset);
+        ApiJsonAppendField(json, entryFirst, L"highlighted", i == plugin->m_nPresetListCurPos);
+        json.push_back(L'}');
+    }
+    json += L"]}";
+    return json;
+}
+
+static std::wstring ApiSanitizeReplyValue(const std::wstring& value)
+{
+    std::wstring sanitized;
+    sanitized.reserve(value.length());
+    for (size_t i = 0; i < value.length(); ++i)
+    {
+        wchar_t ch = value[i];
+        if (ch == L'\r' || ch == L'\n')
+            sanitized.push_back(L' ');
+        else
+            sanitized.push_back(ch);
+    }
+
+    return sanitized;
+}
+
+static bool ApiSendCopyDataReply(HWND senderHwnd, HWND sourceHwnd, const std::wstring& requestId, const std::wstring& command, bool ok, const std::wstring& detail)
+{
+    if (!senderHwnd)
+        return false;
+
+    std::wstring payload = L"version=1\nkind=reply\nstatus=";
+    payload += ok ? L"ok" : L"error";
+    payload += L"\n";
+
+    if (!requestId.empty())
+    {
+        payload += L"request_id=";
+        payload += ApiSanitizeReplyValue(requestId);
+        payload += L"\n";
+    }
+
+    if (!command.empty())
+    {
+        payload += L"command=";
+        payload += ApiSanitizeReplyValue(command);
+        payload += L"\n";
+    }
+
+    if (!detail.empty())
+    {
+        payload += L"detail=";
+        payload += ApiSanitizeReplyValue(detail);
+        payload += L"\n";
+    }
+
+    payload.push_back(L'\0');
+
+    COPYDATASTRUCT copyData;
+    ZeroMemory(&copyData, sizeof(copyData));
+    copyData.dwData = (ULONG_PTR)1;
+    copyData.cbData = (DWORD)(payload.size() * sizeof(wchar_t));
+    copyData.lpData = (PVOID)payload.c_str();
+
+    DWORD_PTR replyResult = 0;
+    return SendMessageTimeoutW(senderHwnd, WM_COPYDATA, (WPARAM)sourceHwnd, (LPARAM)&copyData, SMTO_BLOCK | SMTO_ABORTIFHUNG, 1000, &replyResult) != 0;
 }
 
 #define FRAND ((rand() % 7381)/7380.0f)
@@ -571,6 +1033,94 @@ static bool m_bAlwaysOnTop = false;
 
 void NSEEL_HOSTSTUB_EnterMutex(){}
 void NSEEL_HOSTSTUB_LeaveMutex(){}
+
+static std::wstring ApiBuildStateSnapshotDetail(CPlugin* plugin)
+{
+    std::wstring json = L"{";
+    bool first = true;
+
+    ApiJsonAppendField(json, first, L"kind", L"state_snapshot");
+    ApiJsonAppendField(json, first, L"list_ready", plugin && plugin->m_bPresetListReady);
+    ApiJsonAppendField(json, first, L"loading_preset", plugin && plugin->m_nLoadingPreset > 0);
+    ApiJsonAppendField(json, first, L"preset_count", plugin ? plugin->m_nPresets : 0);
+    ApiJsonAppendField(json, first, L"dir_count", plugin ? plugin->m_nDirs : 0);
+    ApiJsonAppendField(json, first, L"current_index", (plugin && plugin->m_nCurrentPreset >= 0 && plugin->m_nCurrentPreset < plugin->m_nPresets) ? plugin->m_nCurrentPreset : -1);
+    ApiJsonAppendField(json, first, L"current_list_index", (plugin && plugin->m_nPresetListCurPos >= 0 && plugin->m_nPresetListCurPos < plugin->m_nPresets) ? plugin->m_nPresetListCurPos : -1);
+    ApiJsonAppendField(json, first, L"current_name", plugin && plugin->m_nCurrentPreset >= 0 && plugin->m_nCurrentPreset < plugin->m_nPresets ? plugin->m_presets[plugin->m_nCurrentPreset].szFilename : std::wstring());
+    ApiJsonAppendField(json, first, L"current_file", plugin ? std::wstring(plugin->m_szCurrentPresetFile) : std::wstring());
+    ApiJsonAppendField(json, first, L"preset_dir", plugin ? std::wstring(plugin->m_szPresetDir) : std::wstring());
+    ApiJsonAppendField(json, first, L"history_pos", plugin ? plugin->m_presetHistoryPos : 0);
+    ApiJsonAppendField(json, first, L"history_back_fence", plugin ? plugin->m_presetHistoryBackFence : 0);
+    ApiJsonAppendField(json, first, L"history_fwd_fence", plugin ? plugin->m_presetHistoryFwdFence : 0);
+    ApiJsonAppendField(json, first, L"preset_locked_user", plugin ? plugin->m_bPresetLockedByUser : false);
+    ApiJsonAppendField(json, first, L"preset_locked_code", plugin ? plugin->m_bPresetLockedByCode : false);
+    ApiJsonAppendField(json, first, L"sequential_preset_order", plugin ? plugin->m_bSequentialPresetOrder : false);
+    ApiJsonAppendField(json, first, L"hardcuts_disabled", plugin ? plugin->m_bHardCutsDisabled : false);
+    ApiJsonAppendField(json, first, L"rating_enabled", plugin ? plugin->m_bEnableRating : false);
+    ApiJsonAppendField(json, first, L"song_title_anims", plugin ? plugin->m_bSongTitleAnims : false);
+    ApiJsonAppendField(json, first, L"show_fps", plugin ? plugin->m_bShowFPS : false);
+    ApiJsonAppendField(json, first, L"show_rating", plugin ? plugin->m_bShowRating : false);
+    ApiJsonAppendField(json, first, L"show_preset_info", plugin ? plugin->m_bShowPresetInfo : false);
+    ApiJsonAppendField(json, first, L"show_debug_info", plugin ? plugin->m_bShowDebugInfo : false);
+    ApiJsonAppendField(json, first, L"show_song_title", plugin ? plugin->m_bShowSongTitle : false);
+    ApiJsonAppendField(json, first, L"show_song_time", plugin ? plugin->m_bShowSongTime : false);
+    ApiJsonAppendField(json, first, L"show_song_len", plugin ? plugin->m_bShowSongLen : false);
+    ApiJsonAppendField(json, first, L"show_shader_help", plugin ? plugin->m_bShowShaderHelp : false);
+    ApiJsonAppendField(json, first, L"ui_mode", plugin ? (int)plugin->m_UI_mode : 0);
+
+    json += L",\"sprites\":[";
+    bool firstSprite = true;
+    int activeSpriteCount = 0;
+    if (plugin)
+    {
+        for (int slot = 0; slot < NUM_TEX; ++slot)
+        {
+            const td_tex& tex = plugin->m_texmgr.m_tex[slot];
+            if (!tex.pSurface)
+                continue;
+
+            if (!firstSprite)
+                json.push_back(L',');
+            firstSprite = false;
+            activeSpriteCount++;
+
+            json += L"{";
+            bool spriteFirst = true;
+            ApiJsonAppendField(json, spriteFirst, L"slot", slot);
+            ApiJsonAppendField(json, spriteFirst, L"sprite_id", tex.nUserData);
+            ApiJsonAppendField(json, spriteFirst, L"file", std::wstring(tex.szFileName));
+            ApiJsonAppendField(json, spriteFirst, L"image_width", tex.img_w);
+            ApiJsonAppendField(json, spriteFirst, L"image_height", tex.img_h);
+            ApiJsonAppendField(json, spriteFirst, L"start_frame", tex.nStartFrame);
+            ApiJsonAppendField(json, spriteFirst, L"start_time", tex.fStartTime);
+            ApiJsonAppendField(json, spriteFirst, L"x", tex.var_x ? *tex.var_x : 0.0);
+            ApiJsonAppendField(json, spriteFirst, L"y", tex.var_y ? *tex.var_y : 0.0);
+            ApiJsonAppendField(json, spriteFirst, L"sx", tex.var_sx ? *tex.var_sx : 0.0);
+            ApiJsonAppendField(json, spriteFirst, L"sy", tex.var_sy ? *tex.var_sy : 0.0);
+            ApiJsonAppendField(json, spriteFirst, L"rot", tex.var_rot ? *tex.var_rot : 0.0);
+            ApiJsonAppendField(json, spriteFirst, L"repeatx", tex.var_repeatx ? *tex.var_repeatx : 0.0);
+            ApiJsonAppendField(json, spriteFirst, L"repeaty", tex.var_repeaty ? *tex.var_repeaty : 0.0);
+            ApiJsonAppendField(json, spriteFirst, L"r", tex.var_r ? *tex.var_r : 0.0);
+            ApiJsonAppendField(json, spriteFirst, L"g", tex.var_g ? *tex.var_g : 0.0);
+            ApiJsonAppendField(json, spriteFirst, L"b", tex.var_b ? *tex.var_b : 0.0);
+            ApiJsonAppendField(json, spriteFirst, L"a", tex.var_a ? *tex.var_a : 0.0);
+            ApiJsonAppendField(json, spriteFirst, L"blendmode", tex.var_blendmode ? (int)*tex.var_blendmode : 0);
+            ApiJsonAppendField(json, spriteFirst, L"flipx", tex.var_flipx ? (*tex.var_flipx != 0.0) : false);
+            ApiJsonAppendField(json, spriteFirst, L"flipy", tex.var_flipy ? (*tex.var_flipy != 0.0) : false);
+            ApiJsonAppendField(json, spriteFirst, L"done", tex.var_done ? (*tex.var_done != 0.0) : false);
+            ApiJsonAppendField(json, spriteFirst, L"burn", tex.var_burn ? (*tex.var_burn != 0.0) : false);
+            json.push_back(L'}');
+        }
+    }
+    json += L",\"active_sprite_count\":";
+
+    wchar_t countBuf[32];
+    swprintf(countBuf, L"%d", activeSpriteCount);
+    json += countBuf;
+    json.push_back(L'}');
+
+    return json;
+}
 
 // note: these must match layouts in support.h!!
 D3DVERTEXELEMENT9 g_MyVertDecl[] =
@@ -4898,7 +5448,7 @@ void CPlugin::MyRenderUI(
                         int idx = m_nMashPreset[mash];
 
                         wchar_t buf[1024];
-                        swprintf(buf, L"%s%s", wasabiApiLangString(mashNames[mash]), m_presets[idx].szFilename);
+                        swprintf(buf, L"%s%s", wasabiApiLangString(mashNames[mash]), m_presets[idx].szFilename.c_str());
                         RECT r2 = orig_rect;
                         r2.top += h;
                         h += m_text.DrawTextW(GetFont(SIMPLE_FONT), buf, -1, &r2, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX | (pass==0 ? DT_CALCRECT : 0), (mash==m_nMashSlot) ? PLAYLIST_COLOR_HILITE_TRACK : PLAYLIST_COLOR_NORMAL, false);
@@ -5227,7 +5777,7 @@ LRESULT CPlugin::MyWindowProc(HWND hWnd, unsigned uMsg, WPARAM wParam, LPARAM lP
     switch (uMsg)
     {
     case WM_COPYDATA:
-        return HandleApiCopyData((COPYDATASTRUCT*)lParam) ? TRUE : FALSE;
+        return HandleApiCopyData(hWnd, (HWND)wParam, (COPYDATASTRUCT*)lParam) ? TRUE : FALSE;
 
     case WM_COMMAND:
 
@@ -8627,7 +9177,7 @@ void CPlugin::LaunchSongTitleAnim()
 	m_supertext.fStartTime = GetTime();
 }
 
-bool CPlugin::HandleApiCopyData(COPYDATASTRUCT* pCopyData)
+bool CPlugin::HandleApiCopyData(HWND sourceHwnd, HWND senderHwnd, COPYDATASTRUCT* pCopyData)
 {
     if (!pCopyData || !pCopyData->lpData || pCopyData->cbData < sizeof(wchar_t))
         return false;
@@ -8638,54 +9188,647 @@ bool CPlugin::HandleApiCopyData(COPYDATASTRUCT* pCopyData)
         payloadChars--;
 
     std::wstring payload(rawPayload, payloadChars);
+
+    int protocolVersion = 0;
+    bool hasVersion = false;
+    const wchar_t* versionKeys[] = { L"version" };
+    if (!ApiTryReadIntField(payload, versionKeys, 1, &protocolVersion, &hasVersion))
+        return false;
+    if (hasVersion && protocolVersion != 1)
+        return false;
+
+    std::wstring requestId;
+    bool hasRequestId = false;
+    const wchar_t* requestIdKeys[] = { L"request_id" };
+    if (!ApiTryReadStringField(payload, requestIdKeys, 1, &requestId, &hasRequestId))
+        return false;
+    if (hasRequestId && requestId.length() == 0)
+        hasRequestId = false;
+
+    bool shouldReply = (protocolVersion == 1 && hasRequestId && senderHwnd != NULL);
+
     std::wstring command;
     if (!ApiGetValue(payload, L"command", command))
+    {
+        if (shouldReply)
+            ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, L"", false, L"missing_command");
         return false;
+    }
+
+    if (_wcsicmp(command.c_str(), L"ping") == 0 || _wcsicmp(command.c_str(), L"api_version") == 0)
+    {
+        if (shouldReply)
+            ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, true, L"");
+        return true;
+    }
 
     if (_wcsicmp(command.c_str(), L"launch_sprite") == 0 || _wcsicmp(command.c_str(), L"sprite") == 0)
     {
-        int sprite = ApiGetIntValue(payload, L"sprite", -1);
-        int slot = ApiGetIntValue(payload, L"slot", -1);
-
-        if (sprite < 0 || sprite > 99)
+        const wchar_t* spriteKeys[] = { L"sprite", L"sprite_id", L"id" };
+        int sprite = -1;
+        bool hasSprite = false;
+        if (!ApiTryReadIntField(payload, spriteKeys, 3, &sprite, &hasSprite) || !hasSprite || sprite < 0 || sprite > 99)
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_sprite");
             return false;
+        }
 
-        return LaunchSprite(sprite, slot);
+        int slot = -1;
+        bool hasSlot = false;
+        const wchar_t* slotKeys[] = { L"slot" };
+        if (!ApiTryReadIntField(payload, slotKeys, 1, &slot, &hasSlot))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_slot");
+            return false;
+        }
+        if (hasSlot && !ApiValidateSpriteSlot(slot))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_slot");
+            return false;
+        }
+
+        bool ok = LaunchSprite(sprite, hasSlot ? slot : -1);
+        if (shouldReply)
+            ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, ok, ok ? L"" : L"launch_failed");
+        return ok;
     }
 
     if (_wcsicmp(command.c_str(), L"kill_sprite") == 0 || _wcsicmp(command.c_str(), L"sprite_kill") == 0)
     {
-        int slot = ApiGetIntValue(payload, L"slot", -1);
-        if (slot < 0 || slot >= NUM_TEX)
+        const wchar_t* slotKeys[] = { L"slot" };
+        int slot = -1;
+        bool hasSlot = false;
+        if (!ApiTryReadIntField(payload, slotKeys, 1, &slot, &hasSlot) || !hasSlot || slot < 0 || slot >= NUM_TEX)
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_slot");
             return false;
+        }
 
         KillSprite(slot);
+        if (shouldReply)
+            ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, true, L"");
         return true;
     }
 
-    if (_wcsicmp(command.c_str(), L"load_preset") == 0)
+    if (_wcsicmp(command.c_str(), L"set_sprite_image") == 0 ||
+        _wcsicmp(command.c_str(), L"sprite_image") == 0 ||
+        _wcsicmp(command.c_str(), L"update_sprite_image") == 0)
     {
+        const wchar_t* spriteKeys[] = { L"sprite", L"sprite_id", L"id" };
+        int sprite = -1;
+        bool hasSprite = false;
+        if (!ApiTryReadIntField(payload, spriteKeys, 3, &sprite, &hasSprite) || !hasSprite || sprite < 0 || sprite > 99)
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_sprite");
+            return false;
+        }
+
+        const wchar_t* pathKeys[] = { L"path", L"img", L"image" };
         std::wstring path;
-        if (!ApiGetValue(payload, L"path", path) || path.length() == 0)
+        bool hasPath = false;
+        if (!ApiTryReadStringField(payload, pathKeys, 3, &path, &hasPath) || !hasPath || path.length() == 0 || path.length() >= 512)
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_path");
+            return false;
+        }
+
+        int slot = -1;
+        bool hasSlot = false;
+        const wchar_t* slotKeys[] = { L"slot" };
+        if (!ApiTryReadIntField(payload, slotKeys, 1, &slot, &hasSlot))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_slot");
+            return false;
+        }
+        if (hasSlot && !ApiValidateSpriteSlot(slot))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_slot");
+            return false;
+        }
+        if (!hasSlot)
+            slot = ApiFindLiveSpriteSlot(this, sprite);
+
+        wchar_t section[64];
+        swprintf(section, L"img%02d", sprite);
+        WritePrivateProfileStringW(section, L"img", path.c_str(), m_szImgIniFile);
+
+        const wchar_t* colorKeys[] = { L"colorkey", L"color_key", L"colorkey_lo" };
+        int colorKey = 0;
+        bool hasColorKey = false;
+        if (!ApiTryReadIntField(payload, colorKeys, 3, &colorKey, &hasColorKey))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_colorkey");
+            return false;
+        }
+        if (hasColorKey)
+        {
+            wchar_t colorKeyText[32];
+            swprintf(colorKeyText, L"%d", colorKey);
+            WritePrivateProfileStringW(section, L"colorkey", colorKeyText, m_szImgIniFile);
+            WritePrivateProfileStringW(section, L"colorkey_lo", colorKeyText, m_szImgIniFile);
+        }
+
+        bool ok = LaunchSprite(sprite, slot);
+        if (shouldReply)
+            ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, ok, ok ? L"" : L"launch_failed");
+        return ok;
+    }
+
+    if (_wcsicmp(command.c_str(), L"set_sprite_motion") == 0 ||
+        _wcsicmp(command.c_str(), L"set_sprite_params") == 0 ||
+        _wcsicmp(command.c_str(), L"sprite_motion") == 0 ||
+        _wcsicmp(command.c_str(), L"sprite_params") == 0)
+    {
+        const wchar_t* spriteKeys[] = { L"sprite", L"sprite_id", L"id" };
+        int sprite = -1;
+        bool hasSprite = false;
+        if (!ApiTryReadIntField(payload, spriteKeys, 3, &sprite, &hasSprite) || !hasSprite || sprite < 0 || sprite > 99)
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_sprite");
+            return false;
+        }
+
+        const wchar_t* slotKeys[] = { L"slot" };
+        int slot = -1;
+        bool hasSlot = false;
+        if (!ApiTryReadIntField(payload, slotKeys, 1, &slot, &hasSlot))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_slot");
+            return false;
+        }
+        if (hasSlot && !ApiValidateSpriteSlot(slot))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_slot");
+            return false;
+        }
+        if (!hasSlot)
+            slot = ApiFindLiveSpriteSlot(this, sprite);
+
+        if (slot < 0 || slot >= NUM_TEX || !m_texmgr.m_tex[slot].pSurface)
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"slot_not_live");
+            return false;
+        }
+
+        float x = 0.0f, y = 0.0f, sx = 0.0f, sy = 0.0f, rot = 0.0f;
+        float repeatx = 0.0f, repeaty = 0.0f, r = 0.0f, g = 0.0f, b = 0.0f, a = 0.0f;
+        int blendmode = 0;
+        bool flipx = false, flipy = false, done = false, burn = false;
+
+        const wchar_t* xKeys[] = { L"x", L"xpos" };
+        const wchar_t* yKeys[] = { L"y", L"ypos" };
+        const wchar_t* sxKeys[] = { L"sx", L"scale_x", L"scale" };
+        const wchar_t* syKeys[] = { L"sy", L"scale_y" };
+        const wchar_t* rotKeys[] = { L"rot", L"rotation" };
+        const wchar_t* repeatXKeys[] = { L"repeatx", L"repeat_x" };
+        const wchar_t* repeatYKeys[] = { L"repeaty", L"repeat_y" };
+        const wchar_t* rKeys[] = { L"r", L"color_r" };
+        const wchar_t* gKeys[] = { L"g", L"color_g" };
+        const wchar_t* bKeys[] = { L"b", L"color_b" };
+        const wchar_t* aKeys[] = { L"a", L"alpha" };
+        const wchar_t* blendKeys[] = { L"blendmode" };
+        const wchar_t* flipXKeys[] = { L"flipx" };
+        const wchar_t* flipYKeys[] = { L"flipy" };
+        const wchar_t* doneKeys[] = { L"done" };
+        const wchar_t* burnKeys[] = { L"burn" };
+
+        bool hasX = false, hasY = false, hasSx = false, hasSy = false, hasRot = false;
+        bool hasRepeatX = false, hasRepeatY = false, hasR = false, hasG = false, hasB = false, hasA = false;
+        bool hasBlendMode = false, hasFlipX = false, hasFlipY = false, hasDone = false, hasBurn = false;
+
+        if (!ApiTryReadFloatField(payload, xKeys, 2, &x, &hasX) ||
+            !ApiTryReadFloatField(payload, yKeys, 2, &y, &hasY) ||
+            !ApiTryReadFloatField(payload, sxKeys, 3, &sx, &hasSx) ||
+            !ApiTryReadFloatField(payload, syKeys, 2, &sy, &hasSy) ||
+            !ApiTryReadFloatField(payload, rotKeys, 2, &rot, &hasRot) ||
+            !ApiTryReadFloatField(payload, repeatXKeys, 2, &repeatx, &hasRepeatX) ||
+            !ApiTryReadFloatField(payload, repeatYKeys, 2, &repeaty, &hasRepeatY) ||
+            !ApiTryReadFloatField(payload, rKeys, 2, &r, &hasR) ||
+            !ApiTryReadFloatField(payload, gKeys, 2, &g, &hasG) ||
+            !ApiTryReadFloatField(payload, bKeys, 2, &b, &hasB) ||
+            !ApiTryReadFloatField(payload, aKeys, 2, &a, &hasA) ||
+            !ApiTryReadIntField(payload, blendKeys, 1, &blendmode, &hasBlendMode) ||
+            !ApiTryReadBoolField(payload, flipXKeys, 1, &flipx, &hasFlipX) ||
+            !ApiTryReadBoolField(payload, flipYKeys, 1, &flipy, &hasFlipY) ||
+            !ApiTryReadBoolField(payload, doneKeys, 1, &done, &hasDone) ||
+            !ApiTryReadBoolField(payload, burnKeys, 1, &burn, &hasBurn))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_motion_field");
+            return false;
+        }
+
+        if (!hasX && !hasY && !hasSx && !hasSy && !hasRot && !hasRepeatX && !hasRepeatY &&
+            !hasR && !hasG && !hasB && !hasA && !hasBlendMode && !hasFlipX && !hasFlipY && !hasDone && !hasBurn)
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"empty_motion_update");
+            return false;
+        }
+
+        td_tex* tex = &m_texmgr.m_tex[slot];
+        ApiMaybeSetTexVar(tex->var_x, x, hasX);
+        ApiMaybeSetTexVar(tex->var_y, y, hasY);
+        ApiMaybeSetTexVar(tex->var_sx, sx, hasSx);
+        ApiMaybeSetTexVar(tex->var_sy, sy, hasSy);
+        ApiMaybeSetTexVar(tex->var_rot, rot, hasRot);
+        ApiMaybeSetTexVar(tex->var_repeatx, repeatx, hasRepeatX);
+        ApiMaybeSetTexVar(tex->var_repeaty, repeaty, hasRepeatY);
+        ApiMaybeSetTexVar(tex->var_r, r, hasR);
+        ApiMaybeSetTexVar(tex->var_g, g, hasG);
+        ApiMaybeSetTexVar(tex->var_b, b, hasB);
+        ApiMaybeSetTexVar(tex->var_a, a, hasA);
+        ApiMaybeSetTexVar(tex->var_blendmode, (double)blendmode, hasBlendMode);
+        ApiMaybeSetTexVar(tex->var_flipx, flipx ? 1.0 : 0.0, hasFlipX);
+        ApiMaybeSetTexVar(tex->var_flipy, flipy ? 1.0 : 0.0, hasFlipY);
+        ApiMaybeSetTexVar(tex->var_done, done ? 1.0 : 0.0, hasDone);
+        ApiMaybeSetTexVar(tex->var_burn, burn ? 1.0 : 0.0, hasBurn);
+        if (shouldReply)
+            ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, true, L"");
+        return true;
+    }
+
+    if (_wcsicmp(command.c_str(), L"preset_status") == 0 || _wcsicmp(command.c_str(), L"status") == 0)
+    {
+        int start = 0;
+        bool hasStart = false;
+        const wchar_t* startKeys[] = { L"start", L"offset" };
+        if (!ApiTryReadIntField(payload, startKeys, 2, &start, &hasStart))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_start");
+            return false;
+        }
+
+        int limit = 0;
+        bool hasLimit = false;
+        const wchar_t* limitKeys[] = { L"limit", L"count" };
+        if (!ApiTryReadIntField(payload, limitKeys, 2, &limit, &hasLimit))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_limit");
+            return false;
+        }
+
+        if (!hasStart)
+            start = 0;
+        if (!hasLimit)
+            limit = 1;
+        if (limit > 1)
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"unexpected_list_params");
+            return false;
+        }
+
+        std::wstring detail = ApiBuildPresetStatusDetail(this);
+        if (shouldReply)
+            ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, true, detail);
+        return true;
+    }
+
+    if (_wcsicmp(command.c_str(), L"preset_list") == 0 || _wcsicmp(command.c_str(), L"list_presets") == 0)
+    {
+        int start = 0;
+        bool hasStart = false;
+        const wchar_t* startKeys[] = { L"start", L"offset" };
+        if (!ApiTryReadIntField(payload, startKeys, 2, &start, &hasStart))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_start");
+            return false;
+        }
+
+        int limit = 16;
+        bool hasLimit = false;
+        const wchar_t* limitKeys[] = { L"limit", L"count" };
+        if (!ApiTryReadIntField(payload, limitKeys, 2, &limit, &hasLimit))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_limit");
+            return false;
+        }
+
+        if (!hasStart)
+            start = 0;
+        if (!hasLimit)
+            limit = 16;
+        if (limit < 1)
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_limit");
+            return false;
+        }
+
+        std::wstring detail = ApiBuildPresetListDetail(this, start, limit);
+        if (shouldReply)
+            ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, true, detail);
+        return true;
+    }
+
+    if (_wcsicmp(command.c_str(), L"state_snapshot") == 0 || _wcsicmp(command.c_str(), L"snapshot") == 0)
+    {
+        if (!shouldReply)
             return false;
 
-        float blend = ApiGetFloatValue(payload, L"blend", m_fBlendTimeUser);
-        LoadPreset(path.c_str(), blend);
+        std::wstring detail = ApiBuildStateSnapshotDetail(this);
+        ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, true, detail);
+        return true;
+    }
+
+    if (_wcsicmp(command.c_str(), L"prev_preset") == 0 || _wcsicmp(command.c_str(), L"preset_prev") == 0)
+    {
+        float blend = m_fBlendTimeUser;
+        const wchar_t* blendKeys[] = { L"blend" };
+        bool hasBlend = false;
+        if (!ApiTryReadFloatField(payload, blendKeys, 1, &blend, &hasBlend) || (hasBlend && !ApiValidateBlend(blend)))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_blend");
+            return false;
+        }
+
+        PrevPreset(blend);
+        if (shouldReply)
+            ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, true, L"");
+        return true;
+    }
+
+    if (_wcsicmp(command.c_str(), L"next_preset") == 0 || _wcsicmp(command.c_str(), L"preset_next") == 0)
+    {
+        float blend = m_fBlendTimeUser;
+        const wchar_t* blendKeys[] = { L"blend" };
+        bool hasBlend = false;
+        if (!ApiTryReadFloatField(payload, blendKeys, 1, &blend, &hasBlend) || (hasBlend && !ApiValidateBlend(blend)))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_blend");
+            return false;
+        }
+
+        NextPreset(blend);
+        if (shouldReply)
+            ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, true, L"");
+        return true;
+    }
+
+    if (_wcsicmp(command.c_str(), L"load_preset") == 0 ||
+        _wcsicmp(command.c_str(), L"load_preset_by_name") == 0 ||
+        _wcsicmp(command.c_str(), L"load_preset_by_path") == 0)
+    {
+        std::wstring rawPath;
+        const wchar_t* pathKeys[] = { L"path", L"preset", L"name", L"file" };
+        bool hasPath = false;
+        if (!ApiTryReadStringField(payload, pathKeys, 4, &rawPath, &hasPath) || !hasPath || rawPath.length() == 0 || rawPath.length() >= MAX_PATH)
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_path");
+            return false;
+        }
+
+        float blend = m_fBlendTimeUser;
+        const wchar_t* blendKeys[] = { L"blend" };
+        bool hasBlend = false;
+        if (!ApiTryReadFloatField(payload, blendKeys, 1, &blend, &hasBlend) || (hasBlend && !ApiValidateBlend(blend)))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_blend");
+            return false;
+        }
+
+        std::wstring resolvedPath;
+        int resolvedIndex = -1;
+        if (!ApiResolvePresetPath(this, rawPath, &resolvedPath, &resolvedIndex))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"preset_not_found");
+            return false;
+        }
+
+        LoadPreset(resolvedPath.c_str(), blend);
+        if (shouldReply)
+            ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, true, L"");
         return true;
     }
 
     if (_wcsicmp(command.c_str(), L"random_preset") == 0)
     {
-        float blend = ApiGetFloatValue(payload, L"blend", m_fBlendTimeUser);
+        float blend = m_fBlendTimeUser;
+        const wchar_t* blendKeys[] = { L"blend" };
+        bool hasBlend = false;
+        if (!ApiTryReadFloatField(payload, blendKeys, 1, &blend, &hasBlend) || (hasBlend && !ApiValidateBlend(blend)))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_blend");
+            return false;
+        }
+
         LoadRandomPreset(blend);
+        if (shouldReply)
+            ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, true, L"");
         return true;
     }
 
+    if (_wcsicmp(command.c_str(), L"set_overlay_flags") == 0 ||
+        _wcsicmp(command.c_str(), L"set_display_flags") == 0 ||
+        _wcsicmp(command.c_str(), L"set_view_flags") == 0)
+    {
+        bool updatedAny = false;
+        auto applyBoolField = [&](const wchar_t* const* keys, int keyCount, bool* target) -> bool
+        {
+            bool fieldValue = false;
+            bool hasField = false;
+            if (!ApiTryReadBoolField(payload, keys, keyCount, &fieldValue, &hasField))
+                return false;
+            if (hasField && target != nullptr)
+            {
+                *target = fieldValue;
+                updatedAny = true;
+            }
+            return true;
+        };
+
+        const wchar_t* presetInfoKeys[] = { L"preset_info", L"show_preset_info", L"presetinfo" };
+        const wchar_t* fpsKeys[] = { L"fps", L"show_fps" };
+        const wchar_t* ratingKeys[] = { L"rating", L"show_rating" };
+        const wchar_t* debugKeys[] = { L"debug", L"show_debug_info" };
+        const wchar_t* shaderHelpKeys[] = { L"shader_help", L"show_shader_help" };
+        const wchar_t* songTitleKeys[] = { L"song_title", L"show_song_title" };
+        const wchar_t* songTimeKeys[] = { L"song_time", L"show_song_time" };
+        const wchar_t* songLenKeys[] = { L"song_len", L"show_song_len" };
+
+        if (!applyBoolField(presetInfoKeys, 3, &m_bShowPresetInfo) ||
+            !applyBoolField(fpsKeys, 2, &m_bShowFPS) ||
+            !applyBoolField(ratingKeys, 2, &m_bShowRating) ||
+            !applyBoolField(debugKeys, 2, &m_bShowDebugInfo) ||
+            !applyBoolField(shaderHelpKeys, 2, &m_bShowShaderHelp) ||
+            !applyBoolField(songTitleKeys, 2, &m_bShowSongTitle) ||
+            !applyBoolField(songTimeKeys, 2, &m_bShowSongTime) ||
+            !applyBoolField(songLenKeys, 2, &m_bShowSongLen))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_flag_value");
+            return false;
+        }
+
+        if (!updatedAny)
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"empty_flag_update");
+            return false;
+        }
+
+        if (shouldReply)
+            ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, true, L"");
+        return true;
+    }
+
+    if (_wcsicmp(command.c_str(), L"set_runtime_flags") == 0 ||
+        _wcsicmp(command.c_str(), L"set_behavior_flags") == 0 ||
+        _wcsicmp(command.c_str(), L"set_window_flags") == 0)
+    {
+        bool updatedAny = false;
+
+        const wchar_t* alwaysOnTopKeys[] = { L"always_on_top", L"alwaysontop" };
+        const wchar_t* presetLockedKeys[] = { L"preset_locked", L"presetlock", L"lock_preset" };
+        const wchar_t* sequentialKeys[] = { L"sequential_preset_order", L"preset_order", L"sequential" };
+        const wchar_t* hardCutsKeys[] = { L"hardcuts_disabled", L"hard_cuts_disabled" };
+        const wchar_t* ratingEnabledKeys[] = { L"rating_enabled", L"enable_rating" };
+        const wchar_t* songTitleAnimsKeys[] = { L"song_title_anims", L"songtitleanims" };
+
+        bool fieldValue = false;
+        bool hasField = false;
+
+        if (!ApiTryReadBoolField(payload, alwaysOnTopKeys, 2, &fieldValue, &hasField))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_flag_value");
+            return false;
+        }
+        if (hasField)
+        {
+            if (m_bAlwaysOnTop != fieldValue)
+                ToggleAlwaysOnTop(sourceHwnd);
+            m_bAlwaysOnTop = fieldValue;
+            updatedAny = true;
+        }
+
+        fieldValue = false;
+        hasField = false;
+        if (!ApiTryReadBoolField(payload, presetLockedKeys, 3, &fieldValue, &hasField))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_flag_value");
+            return false;
+        }
+        if (hasField)
+        {
+            m_bPresetLockedByUser = fieldValue;
+            updatedAny = true;
+        }
+
+        fieldValue = false;
+        hasField = false;
+        if (!ApiTryReadBoolField(payload, sequentialKeys, 3, &fieldValue, &hasField))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_flag_value");
+            return false;
+        }
+        if (hasField)
+        {
+            if (m_bSequentialPresetOrder != fieldValue)
+            {
+                m_bSequentialPresetOrder = fieldValue;
+                m_presetHistory[0] = m_szCurrentPresetFile;
+                m_presetHistoryPos = 0;
+                m_presetHistoryFwdFence = 1;
+                m_presetHistoryBackFence = 0;
+            }
+            else
+            {
+                m_bSequentialPresetOrder = fieldValue;
+            }
+            updatedAny = true;
+        }
+
+        fieldValue = false;
+        hasField = false;
+        if (!ApiTryReadBoolField(payload, hardCutsKeys, 2, &fieldValue, &hasField))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_flag_value");
+            return false;
+        }
+        if (hasField)
+        {
+            m_bHardCutsDisabled = fieldValue;
+            updatedAny = true;
+        }
+
+        fieldValue = false;
+        hasField = false;
+        if (!ApiTryReadBoolField(payload, ratingEnabledKeys, 2, &fieldValue, &hasField))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_flag_value");
+            return false;
+        }
+        if (hasField)
+        {
+            m_bEnableRating = fieldValue;
+            updatedAny = true;
+        }
+
+        fieldValue = false;
+        hasField = false;
+        if (!ApiTryReadBoolField(payload, songTitleAnimsKeys, 2, &fieldValue, &hasField))
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"invalid_flag_value");
+            return false;
+        }
+        if (hasField)
+        {
+            m_bSongTitleAnims = fieldValue;
+            updatedAny = true;
+        }
+
+        if (!updatedAny)
+        {
+            if (shouldReply)
+                ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"empty_flag_update");
+            return false;
+        }
+
+        if (shouldReply)
+            ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, true, L"");
+        return true;
+    }
+
+    if (shouldReply)
+        ApiSendCopyDataReply(senderHwnd, sourceHwnd, requestId, command, false, L"unsupported_command");
     return false;
 }
 
 bool CPlugin::LaunchSprite(int nSpriteNum, int nSlot)
 {
+	if (nSlot < -1 || nSlot >= NUM_TEX)
+		return false;
+
 	char initcode[8192], code[8192], sectionA[64];
 	char szTemp[8192];
 	wchar_t img[512], section[64];
@@ -8912,7 +10055,7 @@ void CPlugin::GenWarpPShaderText(char *szShaderText, float decay, bool bWrap)
     p += sprintf(p, "%c", 1);
 
     p += sprintf(p, "    // sample previous frame%c", LF);
-    p += sprintf(p, "    ret = tex2D( sampler%s_main, uv ).xyz;%c", bWrap ? L"" : L"_fc", LF);
+    p += sprintf(p, "    ret = tex2D( sampler%s_main, uv ).xyz;%c", bWrap ? "" : "_fc", LF);
     p += sprintf(p, "    %c", LF);
     p += sprintf(p, "    // darken (decay) over time%c", LF);
     p += sprintf(p, "    ret *= %.2f; //or try: ret -= 0.004;%c", decay, LF);
