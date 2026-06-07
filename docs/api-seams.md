@@ -79,8 +79,6 @@ request_id=42
 version=1
 ```
 
-Aliases: `status`.
-
 The v1 reply uses the existing best-effort `WM_COPYDATA` reply path and returns a compact JSON object in `detail`. It includes the current preset, preset collection counts, the current list cursor, preset directory, loading state, and history fences.
 
 ### Browse the preset list
@@ -103,7 +101,7 @@ request_id=42
 version=1
 ```
 
-Aliases: `snapshot`.
+Aliases: `snapshot`, `status`.
 
 This returns a compact JSON object with the current preset, preset collection cursor, loading state, history fences, basic playback/control flags, and a `sprites` array for live sprite slots. It is read-only and uses the v1 `WM_COPYDATA` reply path, so local automation can query the running instance without a second transport.
 

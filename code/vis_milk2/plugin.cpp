@@ -9461,7 +9461,7 @@ bool CPlugin::HandleApiCopyData(HWND sourceHwnd, HWND senderHwnd, COPYDATASTRUCT
         return true;
     }
 
-    if (_wcsicmp(command.c_str(), L"preset_status") == 0 || _wcsicmp(command.c_str(), L"status") == 0)
+    if (_wcsicmp(command.c_str(), L"preset_status") == 0)
     {
         int start = 0;
         bool hasStart = false;
@@ -9539,7 +9539,7 @@ bool CPlugin::HandleApiCopyData(HWND sourceHwnd, HWND senderHwnd, COPYDATASTRUCT
         return true;
     }
 
-    if (_wcsicmp(command.c_str(), L"state_snapshot") == 0 || _wcsicmp(command.c_str(), L"snapshot") == 0)
+    if (_wcsicmp(command.c_str(), L"state_snapshot") == 0 || _wcsicmp(command.c_str(), L"snapshot") == 0 || _wcsicmp(command.c_str(), L"status") == 0)
     {
         if (!shouldReply)
             return false;

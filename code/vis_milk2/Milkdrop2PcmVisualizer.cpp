@@ -517,6 +517,16 @@ int StartThreads(HINSTANCE instance) {
 
     if (WAIT_OBJECT_0 + 1 == dwWaitResult) {
         ERR(L"Thread aborted before starting to loopback capture: hr = 0x%08x", threadArgs.hr);
+
+        wchar_t allowAudioLess[8] = { 0 };
+        if (GetEnvironmentVariableW(L"MILKDROP_ALLOW_AUDIOLESS", allowAudioLess, ARRAYSIZE(allowAudioLess)) > 0 &&
+            _wcsicmp(allowAudioLess, L"1") == 0) {
+            LOG(L"%s", L"MILKDROP_ALLOW_AUDIOLESS=1 set; starting renderer without loopback audio capture.");
+            StartRenderThread(instance);
+            WaitForSingleObject(thread, INFINITE);
+            return 0;
+        }
+
         return -__LINE__;
     }
 
