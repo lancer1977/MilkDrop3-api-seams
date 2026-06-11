@@ -261,6 +261,23 @@ Known-good payloads from the source seam:
 
 A Linux/Wine reproduction was attempted from this repo using Wine 9.0, Xvfb, and the repo's `linux/MilkDrop 3 linux.exe` binary. After installing the documented Wine prerequisites (`d3dx9` and `vcrun2019`), the executable still exited immediately and never left a stable window available for `WM_COPYDATA` smoke, so the definitive Windows runtime verification remains pending.
 
+## Windows runtime smoke plan
+
+Use this exact runbook when a Windows target is available:
+
+1. Rebuild the fork on Windows with Visual Studio/MSBuild if the runtime binary is stale.
+2. Launch MilkDrop3 and keep the top-level window visible long enough for title lookup.
+3. Run the sender harness from this repo:
+   - `./tools/send-milkdrop-copydata.ps1 -WindowTitle MilkDrop -Payload "command=ping"`
+   - `./tools/send-milkdrop-copydata.ps1 -WindowTitle MilkDrop -Payload "command=launch_sprite`nsprite=01`nslot=-1"`
+   - `./tools/send-milkdrop-copydata.ps1 -WindowTitle MilkDrop -Payload "command=kill_sprite`nslot=0"`
+   - `./tools/send-milkdrop-copydata.ps1 -WindowTitle MilkDrop -Payload "command=load_preset`npath=C:\\MilkDrop3\\presets\\Example.milk`nblend=1.7"`
+   - `./tools/send-milkdrop-copydata.ps1 -WindowTitle MilkDrop -Payload "command=random_preset`nblend=1.7"`
+4. Record, for each command, the exact payload, sender output (`accepted` or `rejected`), and the observed runtime behavior in the MilkDrop3 window.
+5. If a command fails, capture the repro details needed for a follow-up card: Windows version, build configuration, exact payload, window title fragment, and any visible/logged behavior.
+
+The local sender harness is intentionally narrow and local-only; it is the smoke tool, not a substitute for Windows runtime verification.
+
 ## Next seams to expose
 
 - Linux xbuild is useful for checking repo structure and documentation snippets, but it does not validate the Windows C++ runtime path that actually executes `HandleApiCopyData`.
