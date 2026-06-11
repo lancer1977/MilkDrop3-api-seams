@@ -745,13 +745,13 @@ WINE REGISTRY Version 2
 [Software\\Wine\\FileOpenAssociations] 1780680433
 #time=1dcf5108c430d3a
 
-[Software\\Wine\\Fonts] 1780786654
-#time=1dcf607dd1251d8
+[Software\\Wine\\Fonts] 1780857983
+#time=1dcf6adf044df4a
 "Codepages"="1252,437"
 "LogPixels"=dword:00000060
 
-[Software\\Wine\\Fonts\\External Fonts] 1780786654
-#time=1dcf607dd164dce
+[Software\\Wine\\Fonts\\External Fonts] 1780857983
+#time=1dcf6adf047eea6
 "@Droid Sans Fallback (TrueType)"="Z:\\usr\\share\\fonts\\truetype\\droid\\DroidSansFallbackFull.ttf"
 "@IPAGothic (TrueType)"="Z:\\usr\\share\\fonts\\opentype\\ipafont-gothic\\ipag.ttf"
 "@IPAPGothic (TrueType)"="Z:\\usr\\share\\fonts\\opentype\\ipafont-gothic\\ipagp.ttf"
@@ -900,6 +900,7 @@ WINE REGISTRY Version 2
 "NimbusSansNarrow-BoldOblique (TrueType)"="Z:\\usr\\share\\fonts\\opentype\\urw-base35\\NimbusSansNarrow-BoldOblique.otf"
 "NimbusSansNarrow-Oblique (TrueType)"="Z:\\usr\\share\\fonts\\opentype\\urw-base35\\NimbusSansNarrow-Oblique.otf"
 "NimbusSansNarrow-Regular (TrueType)"="Z:\\usr\\share\\fonts\\opentype\\urw-base35\\NimbusSansNarrow-Regular.otf"
+"Noto Color Emoji"="Z:\\usr\\share\\fonts\\truetype\\noto\\NotoColorEmoji.ttf"
 "Noto Kufi Arabic Black (TrueType)"="Z:\\usr\\share\\fonts\\truetype\\noto\\NotoKufiArabic-Black.ttf"
 "Noto Kufi Arabic Bold (TrueType)"="Z:\\usr\\share\\fonts\\truetype\\noto\\NotoKufiArabic-Bold.ttf"
 "Noto Kufi Arabic Extra Bold (TrueType)"="Z:\\usr\\share\\fonts\\truetype\\noto\\NotoKufiArabic-ExtraBold.ttf"
