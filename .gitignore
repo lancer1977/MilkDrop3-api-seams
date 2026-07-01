@@ -3,3 +3,8 @@
 .wine-test/dosdevices/e::
 .wine-test/drive_c/users/
 .wine-test/winetricks.log
+
+# Build outputs
+bin/
+obj/
+artifacts/
