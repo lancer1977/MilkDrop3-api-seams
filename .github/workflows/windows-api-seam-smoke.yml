@@ -17,18 +17,21 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-        with:
-          # The repository contains a tracked Wine prefix with POSIX device
-          # names such as .wine-test/dosdevices/c:, which Git for Windows
-          # cannot materialize. The smoke needs only these source paths.
-          sparse-checkout: |
-            .github
-            code
-            docs/api-seams.md
-            tools/send-milkdrop-copydata.ps1
-          sparse-checkout-cone-mode: false
+      - name: Check out source without Wine prefix
+        shell: pwsh
+        run: |
+          # Do not use actions/checkout here: its initial Windows checkout
+          # materializes the tracked POSIX device path .wine-test/dosdevices/c:.
+          # Fetch without checkout, then materialize only the source needed by
+          # this smoke.
+          git init .
+          git remote add origin "https://github.com/$env:GITHUB_REPOSITORY.git"
+          git config core.sparseCheckout true
+          git config core.sparseCheckoutCone false
+          @('/.github/','/code/','/docs/api-seams.md','/tools/send-milkdrop-copydata.ps1') |
+            Set-Content .git/info/sparse-checkout -Encoding ascii
+          git fetch --no-tags --depth=1 origin $env:GITHUB_SHA
+          git checkout --force $env:GITHUB_SHA
 
       - name: Build Debug Win32 target
         id: build
