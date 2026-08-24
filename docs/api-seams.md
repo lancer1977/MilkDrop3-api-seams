@@ -265,7 +265,11 @@ A Linux/Wine reproduction was attempted from this repo using Wine 9.0, Xvfb, and
 
 Issue `MilkDrop3-api-seams#2` adds `.github/workflows/windows-api-seam-smoke.yml`, which performs a real `windows-latest` attempt. It builds `code/MilkDrop3.sln` as `Debug|Win32`, records the exact MSBuild exit code, and then attempts to launch the current build output (or the tracked Debug executable if the build cannot complete). It invokes the local PowerShell sender with exact payload logging for `ping`, `launch_sprite`, `kill_sprite`, `load_preset`, `random_preset`, and an out-of-range `launch_sprite` request (`sprite=9999`, `slot=9999`) that is expected to be rejected. Window discovery, sender output/exit status, elapsed time, and post-command process state are uploaded as JSONL evidence.
 
-No hosted Windows result has been observed in this checkout yet. Until the workflow runs, the Windows seam remains **unverified**; this section must be replaced with the observed result and its exact blocker (for example, build failure, DirectX/device initialization failure, no top-level window, or command-level rejection) after the first run. A missing window is not treated as command success.
+Observed run: [GitHub Actions run 32772524951](https://github.com/lancer1977/MilkDrop3-api-seams/actions/runs/32772524951), commit `c72e095`. MSBuild was found on the `windows-latest` image and the `Debug|Win32` build was attempted, but it failed with `C1083` because the runner did not have `d3dx9.h` and `d3dx9math.h`. The workflow then launched the tracked Debug fallback executable; its process remained alive, but no top-level MilkDrop3 window appeared during the 20-second observation period.
+
+The sender was still invoked for every required payload. `ping`, `launch_sprite`, `kill_sprite`, `load_preset`, `random_preset`, and the deliberately out-of-range `launch_sprite` payload (`sprite=9999`, `slot=9999`) all returned sender-level `rejected` with exit code `2`, because no target window was available. The malformed payload was therefore **not** counted as a confirmed handler-level clean rejection. Exact payloads, results, timings, and the build log are in artifact `windows-api-seam-smoke-32772524951`.
+
+Conclusion: the Windows API seam remains **runtime-unverified**. The precise blocker in this hosted attempt is the missing legacy DirectX 9 SDK headers, followed by the fallback executable failing to present a discoverable window; no command reached `HandleApiCopyData`.
 
 ## Windows runtime smoke plan
 
