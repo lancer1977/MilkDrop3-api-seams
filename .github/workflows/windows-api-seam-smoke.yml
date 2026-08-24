@@ -19,6 +19,16 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          # The repository contains a tracked Wine prefix with POSIX device
+          # names such as .wine-test/dosdevices/c:, which Git for Windows
+          # cannot materialize. The smoke needs only these source paths.
+          sparse-checkout: |
+            .github
+            code
+            docs/api-seams.md
+            tools/send-milkdrop-copydata.ps1
+          sparse-checkout-cone-mode: false
 
       - name: Build Debug Win32 target
         id: build
