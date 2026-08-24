@@ -261,6 +261,12 @@ Known-good payloads from the source seam:
 
 A Linux/Wine reproduction was attempted from this repo using Wine 9.0, Xvfb, and the repo's `linux/MilkDrop 3 linux.exe` binary. After installing the documented Wine prerequisites (`d3dx9` and `vcrun2019`), the executable still exited immediately and never left a stable window available for `WM_COPYDATA` smoke, so the definitive Windows runtime verification remains pending.
 
+## Windows Actions smoke status
+
+Issue `MilkDrop3-api-seams#2` adds `.github/workflows/windows-api-seam-smoke.yml`, which performs a real `windows-latest` attempt. It builds `code/MilkDrop3.sln` as `Debug|Win32`, records the exact MSBuild exit code, and then attempts to launch the current build output (or the tracked Debug executable if the build cannot complete). It invokes the local PowerShell sender with exact payload logging for `ping`, `launch_sprite`, `kill_sprite`, `load_preset`, `random_preset`, and an out-of-range `launch_sprite` request (`sprite=9999`, `slot=9999`) that is expected to be rejected. Window discovery, sender output/exit status, elapsed time, and post-command process state are uploaded as JSONL evidence.
+
+No hosted Windows result has been observed in this checkout yet. Until the workflow runs, the Windows seam remains **unverified**; this section must be replaced with the observed result and its exact blocker (for example, build failure, DirectX/device initialization failure, no top-level window, or command-level rejection) after the first run. A missing window is not treated as command success.
+
 ## Windows runtime smoke plan
 
 Use this exact runbook when a Windows target is available:

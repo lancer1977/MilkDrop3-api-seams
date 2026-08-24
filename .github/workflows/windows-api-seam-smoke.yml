@@ -1,0 +1,131 @@
+name: Windows API seam smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/windows-api-seam-smoke.yml'
+      - 'code/**'
+      - 'tools/send-milkdrop-copydata.ps1'
+      - 'docs/api-seams.md'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build Debug Win32 target
+        id: build
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:GITHUB_WORKSPACE 'api-seam-smoke-build.log'
+          & msbuild code/MilkDrop3.sln /m /v:minimal /p:Configuration=Debug /p:Platform=Win32 *> $log
+          $exitCode = $LASTEXITCODE
+          "build_exit_code=$exitCode" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "exit_code=$exitCode" >> $env:GITHUB_OUTPUT
+          Get-Content $log
+          exit 0
+
+      - name: Launch and exercise local WM_COPYDATA seam
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $evidencePath = Join-Path $env:GITHUB_WORKSPACE 'api-seam-smoke.jsonl'
+          Remove-Item $evidencePath -ErrorAction SilentlyContinue
+
+          function Write-Evidence([hashtable] $record) {
+            $record.timestamp_utc = (Get-Date).ToUniversalTime().ToString('o')
+            $record | ConvertTo-Json -Compress | Tee-Object -FilePath $evidencePath -Append
+          }
+
+          $builtExe = Get-ChildItem (Join-Path $env:GITHUB_WORKSPACE 'code\vis_milk2\Debug') -Filter '*.exe' -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          $trackedExe = Join-Path $env:GITHUB_WORKSPACE 'code\vis_milk2\Debug\MilkDrop 3 new icon.exe'
+          $buildExit = '${{ steps.build.outputs.exit_code }}'
+          if ($buildExit -eq '0' -and $null -ne $builtExe) {
+            $exe = $builtExe.FullName
+            $source = 'current Debug build output'
+          } elseif (Test-Path $trackedExe) {
+            $exe = $trackedExe
+            $source = 'tracked Debug fallback after build failure'
+          } elseif ($null -ne $builtExe) {
+            $exe = $builtExe.FullName
+            $source = 'Debug output despite reported build failure'
+          } else {
+            Write-Evidence @{ phase='launch'; result='build_or_executable_failure'; build_exit_code=$buildExit }
+            exit 0
+          }
+
+          Write-Evidence @{ phase='launch'; executable=$exe; executable_source=$source; build_exit_code=$buildExit }
+          $process = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru
+          $deadline = (Get-Date).AddSeconds(20)
+          $window = $null
+          while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 1
+            $process.Refresh()
+            if ($process.HasExited) { break }
+            if ($process.MainWindowHandle -ne 0 -and -not [string]::IsNullOrWhiteSpace($process.MainWindowTitle)) {
+              $window = $process
+              break
+            }
+          }
+
+          if ($null -eq $window) {
+            $exit = if ($process.HasExited) { $process.ExitCode } else { $null }
+            Write-Evidence @{ phase='window'; result='window_not_observed'; pid=$process.Id; process_exited=$process.HasExited; process_exit_code=$exit }
+          } else {
+            Write-Evidence @{ phase='window'; result='window_observed'; pid=$window.Id; title=$window.MainWindowTitle; hwnd=('0x{0:X}' -f $window.MainWindowHandle.ToInt64()) }
+          }
+
+          $sender = Join-Path $env:GITHUB_WORKSPACE 'tools\send-milkdrop-copydata.ps1'
+          $cases = @(
+            @{ name='ping'; payload="command=ping"; expected='accepted' },
+            @{ name='launch_sprite'; payload="command=launch_sprite`nsprite=01`nslot=-1"; expected='accepted' },
+            @{ name='kill_sprite'; payload="command=kill_sprite`nslot=0"; expected='accepted' },
+            @{ name='load_preset'; payload="command=load_preset`npath=C:\MilkDrop3\presets\Example.milk`nblend=1.7"; expected='accepted' },
+            @{ name='random_preset'; payload="command=random_preset`nblend=1.7"; expected='accepted' },
+            @{ name='malformed_out_of_range'; payload="command=launch_sprite`nsprite=9999`nslot=9999"; expected='rejected' }
+          )
+
+          foreach ($case in $cases) {
+            $requestId = "gha-$($case.name)"
+            $start = Get-Date
+            $output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sender -WindowTitle 'MilkDrop' -Payload $case.payload -RequestId $requestId 2>&1 | ForEach-Object { $_.ToString() })
+            $exitCode = $LASTEXITCODE
+            $elapsedMs = [int]((Get-Date) - $start).TotalMilliseconds
+            $observation = if ($null -eq $window) { 'no window observed; sender could not reach MilkDrop3' } else { 'sender attempted while window was observed' }
+            $rejectionConfirmed = $false
+            if ($case.name -eq 'malformed_out_of_range' -and $null -ne $window) {
+              $rejectionConfirmed = (($output -join "`n") -match '(?im)^rejected') -and $exitCode -eq 2 -and $elapsedMs -lt 5000 -and -not $window.HasExited
+            }
+            Write-Evidence @{ phase='command'; name=$case.name; payload=$case.payload; expected=$case.expected; sender_output=($output -join "`n"); sender_exit_code=$exitCode; elapsed_ms=$elapsedMs; window_observation=$observation; malformed_rejection_confirmed=$rejectionConfirmed }
+            if ($case.name -eq 'malformed_out_of_range' -and $null -ne $window -and -not $rejectionConfirmed) {
+              Write-Evidence @{ phase='result'; result='malformed_payload_not_cleanly_rejected' }
+              $malformedFailure = $true
+            }
+          }
+
+          if ($null -ne $window) {
+            $window.Refresh()
+            Write-Evidence @{ phase='window'; result='post_commands'; pid=$window.Id; process_exited=$window.HasExited; title=$window.MainWindowTitle }
+          }
+          if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+          if ($malformedFailure) { exit 1 }
+
+      - name: Publish smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-api-seam-smoke-${{ github.run_id }}
+          path: |
+            api-seam-smoke.jsonl
+            api-seam-smoke-build.log
+          if-no-files-found: warn
