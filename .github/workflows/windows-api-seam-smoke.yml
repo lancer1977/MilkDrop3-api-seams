@@ -22,16 +22,14 @@ jobs:
         run: |
           # Do not use actions/checkout here: its initial Windows checkout
           # materializes the tracked POSIX device path .wine-test/dosdevices/c:.
-          # Fetch without checkout, then materialize only the source needed by
-          # this smoke.
+          # Fetch without checkout, then archive/extract only the source needed
+          # by this smoke.
           git init .
           git remote add origin "https://github.com/$env:GITHUB_REPOSITORY.git"
-          git config core.sparseCheckout true
-          git config core.sparseCheckoutCone false
-          @('/.github/','/code/','/docs/api-seams.md','/tools/send-milkdrop-copydata.ps1') |
-            Set-Content .git/info/sparse-checkout -Encoding ascii
           git fetch --no-tags --depth=1 origin $env:GITHUB_SHA
-          git checkout --force $env:GITHUB_SHA
+          git archive --format=tar --output=source-subset.tar $env:GITHUB_SHA .github code docs/api-seams.md tools/send-milkdrop-copydata.ps1
+          tar -xf source-subset.tar
+          Remove-Item source-subset.tar
 
       - name: Build Debug Win32 target
         id: build
