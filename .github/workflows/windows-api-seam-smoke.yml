@@ -26,6 +26,7 @@ jobs:
           # by this smoke.
           git init .
           git remote add origin "https://github.com/$env:GITHUB_REPOSITORY.git"
+          git config core.protectNTFS false
           git fetch --no-tags --depth=1 origin $env:GITHUB_SHA
           git archive --format=tar --output=source-subset.tar $env:GITHUB_SHA .github code docs/api-seams.md tools/send-milkdrop-copydata.ps1
           tar -xf source-subset.tar
@@ -37,8 +38,21 @@ jobs:
         shell: pwsh
         run: |
           $log = Join-Path $env:GITHUB_WORKSPACE 'api-seam-smoke-build.log'
-          & msbuild code/MilkDrop3.sln /m /v:minimal /p:Configuration=Debug /p:Platform=Win32 *> $log
-          $exitCode = $LASTEXITCODE
+          $msbuild = (Get-Command msbuild.exe -ErrorAction SilentlyContinue).Source
+          if (-not $msbuild) {
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            if (Test-Path $vswhere) {
+              $msbuild = & $vswhere -latest -products '*' -requires Microsoft.Component.MSBuild -find 'MSBuild\Current\Bin\MSBuild.exe' | Select-Object -First 1
+            }
+          }
+          if (-not $msbuild) {
+            'MSBuild was not found on PATH or through vswhere.' | Set-Content $log
+            $exitCode = 127
+          } else {
+            "Using MSBuild: $msbuild" | Set-Content $log
+            & $msbuild code/MilkDrop3.sln /m /v:minimal /p:Configuration=Debug /p:Platform=Win32 *>> $log
+            $exitCode = $LASTEXITCODE
+          }
           "build_exit_code=$exitCode" | Add-Content $env:GITHUB_STEP_SUMMARY
           "exit_code=$exitCode" >> $env:GITHUB_OUTPUT
           Get-Content $log
