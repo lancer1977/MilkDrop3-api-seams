@@ -17,78 +17,60 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
-      - name: Install legacy DirectX SDK headers and libraries
+      - name: Prepare legacy DirectX SDK libraries (headers are now vendored)
         shell: pwsh
         run: |
-          # The d3dx9.h, d3dx9math.h headers and d3dx9.lib library are required.
-          # Try multiple fallback locations to find them on the runner.
+          # D3DX9 headers (d3dx9.h, d3dx9math.h) are now vendored in code/vis_milk2/thirdparty/d3dx9/.
+          # However, d3dx9.lib (import library) and d3d9.lib still need to be available for linking.
+          # Try to locate these libraries on the runner.
           $dxDir = "C:\dx9"
-          New-Item -ItemType Directory -Path "$dxDir\Include" -Force | Out-Null
           New-Item -ItemType Directory -Path "$dxDir\Lib\x86" -Force | Out-Null
 
           # Check if legacy DirectX SDK is already installed
           $legacyPath = "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)"
-          if (Test-Path "$legacyPath\Include\d3dx9.h") {
+          if (Test-Path "$legacyPath\Lib\x86\d3dx9.lib") {
             "DXSDK_DIR=$legacyPath" | Add-Content $env:GITHUB_ENV
-            Write-Host "Using legacy DirectX SDK at $legacyPath"
+            Write-Host "Using legacy DirectX SDK libraries at $legacyPath"
             exit 0
           }
 
-          # Search for d3dx9 headers and libraries in standard locations
-          $searchPatterns = @(
-            @{ path="C:\Program Files (x86)\Windows Kits\10\Include\*"; name="Windows Kit 10" },
-            @{ path="C:\Program Files\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\include"; name="VS2022 MSVC" }
-          )
-
-          $foundHeader = $false
-          foreach ($pattern in $searchPatterns) {
-            $dirs = @(Get-Item -Path $pattern.path -ErrorAction SilentlyContinue)
-            foreach ($dir in $dirs) {
-              $headerFile = Get-Item -Path "$($dir.FullName)\d3dx9.h" -ErrorAction SilentlyContinue
-              if ($headerFile) {
-                Write-Host "Found d3dx9.h in $($pattern.name): $($headerFile.FullName)"
-                Copy-Item $dir.FullName\d3dx9*.h "$dxDir\Include\" -ErrorAction SilentlyContinue
-                $foundHeader = $true
-                break
-              }
-            }
-            if ($foundHeader) { break }
-          }
-
-          # Try to find d3dx9.lib in lib directories
+          # Search for d3dx9.lib and d3d9.lib in standard locations
           $libSearchPaths = @(
             "C:\Program Files (x86)\Windows Kits\10\Lib\*\x86",
             "C:\Program Files\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\lib\x86",
             "C:\Program Files (x86)\Microsoft Visual Studio\2019\*\VC\Tools\MSVC\*\lib\x86"
           )
 
-          $foundLib = $false
+          $foundD3dx9Lib = $false
+          $foundD3d9Lib = $false
+
           foreach ($pattern in $libSearchPaths) {
-            $libs = @(Get-Item -Path "$pattern\d3dx9.lib" -ErrorAction SilentlyContinue)
-            foreach ($lib in $libs) {
-              Write-Host "Found d3dx9.lib: $($lib.FullName)"
-              Copy-Item $lib.FullName "$dxDir\Lib\x86\" -ErrorAction SilentlyContinue
-              $foundLib = $true
-              break
+            if (-not $foundD3dx9Lib) {
+              $libs = @(Get-Item -Path "$pattern\d3dx9.lib" -ErrorAction SilentlyContinue)
+              if ($libs.Count -gt 0) {
+                Write-Host "Found d3dx9.lib: $($libs[0].FullName)"
+                Copy-Item $libs[0].FullName "$dxDir\Lib\x86\" -ErrorAction SilentlyContinue
+                $foundD3dx9Lib = $true
+              }
             }
-            if ($foundLib) { break }
+
+            if (-not $foundD3d9Lib) {
+              $libs = @(Get-Item -Path "$pattern\d3d9.lib" -ErrorAction SilentlyContinue)
+              if ($libs.Count -gt 0) {
+                Write-Host "Found d3d9.lib: $($libs[0].FullName)"
+                Copy-Item $libs[0].FullName "$dxDir\Lib\x86\" -ErrorAction SilentlyContinue
+                $foundD3d9Lib = $true
+              }
+            }
+
+            if ($foundD3dx9Lib -and $foundD3d9Lib) { break }
           }
 
-          # Also try to copy d3d9.lib if available
-          foreach ($pattern in $libSearchPaths) {
-            $libs = @(Get-Item -Path "$pattern\d3d9.lib" -ErrorAction SilentlyContinue)
-            if ($libs.Count -gt 0) {
-              Copy-Item $libs[0].FullName "$dxDir\Lib\x86\" -ErrorAction SilentlyContinue
-              Write-Host "Copied d3d9.lib from $($libs[0].FullName)"
-              break
-            }
-          }
-
-          if ($foundHeader -or $foundLib) {
+          if ($foundD3dx9Lib -or $foundD3d9Lib) {
             "DXSDK_DIR=$dxDir" | Add-Content $env:GITHUB_ENV
             Write-Host "Configured DXSDK_DIR=$dxDir"
           } else {
-            Write-Warning "Could not locate d3dx9 headers/libraries; build may fail but will continue with fallback executable"
+            Write-Warning "Could not locate d3dx9.lib/d3d9.lib; build may fail but will continue"
           }
 
       - name: Check out source without Wine prefix
