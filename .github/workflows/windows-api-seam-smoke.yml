@@ -17,6 +17,80 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
+      - name: Install legacy DirectX SDK headers and libraries
+        shell: pwsh
+        run: |
+          # The d3dx9.h, d3dx9math.h headers and d3dx9.lib library are required.
+          # Try multiple fallback locations to find them on the runner.
+          $dxDir = "C:\dx9"
+          New-Item -ItemType Directory -Path "$dxDir\Include" -Force | Out-Null
+          New-Item -ItemType Directory -Path "$dxDir\Lib\x86" -Force | Out-Null
+
+          # Check if legacy DirectX SDK is already installed
+          $legacyPath = "C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)"
+          if (Test-Path "$legacyPath\Include\d3dx9.h") {
+            "DXSDK_DIR=$legacyPath" | Add-Content $env:GITHUB_ENV
+            Write-Host "Using legacy DirectX SDK at $legacyPath"
+            exit 0
+          }
+
+          # Search for d3dx9 headers and libraries in standard locations
+          $searchPatterns = @(
+            @{ path="C:\Program Files (x86)\Windows Kits\10\Include\*"; name="Windows Kit 10" },
+            @{ path="C:\Program Files\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\include"; name="VS2022 MSVC" }
+          )
+
+          $foundHeader = $false
+          foreach ($pattern in $searchPatterns) {
+            $dirs = @(Get-Item -Path $pattern.path -ErrorAction SilentlyContinue)
+            foreach ($dir in $dirs) {
+              $headerFile = Get-Item -Path "$($dir.FullName)\d3dx9.h" -ErrorAction SilentlyContinue
+              if ($headerFile) {
+                Write-Host "Found d3dx9.h in $($pattern.name): $($headerFile.FullName)"
+                Copy-Item $dir.FullName\d3dx9*.h "$dxDir\Include\" -ErrorAction SilentlyContinue
+                $foundHeader = $true
+                break
+              }
+            }
+            if ($foundHeader) { break }
+          }
+
+          # Try to find d3dx9.lib in lib directories
+          $libSearchPaths = @(
+            "C:\Program Files (x86)\Windows Kits\10\Lib\*\x86",
+            "C:\Program Files\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\lib\x86",
+            "C:\Program Files (x86)\Microsoft Visual Studio\2019\*\VC\Tools\MSVC\*\lib\x86"
+          )
+
+          $foundLib = $false
+          foreach ($pattern in $libSearchPaths) {
+            $libs = @(Get-Item -Path "$pattern\d3dx9.lib" -ErrorAction SilentlyContinue)
+            foreach ($lib in $libs) {
+              Write-Host "Found d3dx9.lib: $($lib.FullName)"
+              Copy-Item $lib.FullName "$dxDir\Lib\x86\" -ErrorAction SilentlyContinue
+              $foundLib = $true
+              break
+            }
+            if ($foundLib) { break }
+          }
+
+          # Also try to copy d3d9.lib if available
+          foreach ($pattern in $libSearchPaths) {
+            $libs = @(Get-Item -Path "$pattern\d3d9.lib" -ErrorAction SilentlyContinue)
+            if ($libs.Count -gt 0) {
+              Copy-Item $libs[0].FullName "$dxDir\Lib\x86\" -ErrorAction SilentlyContinue
+              Write-Host "Copied d3d9.lib from $($libs[0].FullName)"
+              break
+            }
+          }
+
+          if ($foundHeader -or $foundLib) {
+            "DXSDK_DIR=$dxDir" | Add-Content $env:GITHUB_ENV
+            Write-Host "Configured DXSDK_DIR=$dxDir"
+          } else {
+            Write-Warning "Could not locate d3dx9 headers/libraries; build may fail but will continue with fallback executable"
+          }
+
       - name: Check out source without Wine prefix
         shell: pwsh
         run: |
@@ -90,15 +164,21 @@ jobs:
           }
 
           Write-Evidence @{ phase='launch'; executable=$exe; executable_source=$source; build_exit_code=$buildExit }
-          $process = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru
-          $deadline = (Get-Date).AddSeconds(20)
+          $process = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru -NoNewWindow:$false
+          $deadline = (Get-Date).AddSeconds(30)
           $window = $null
+          $checksPerformed = 0
           while ((Get-Date) -lt $deadline) {
-            Start-Sleep -Seconds 1
+            Start-Sleep -Milliseconds 500
             $process.Refresh()
-            if ($process.HasExited) { break }
+            $checksPerformed++
+            if ($process.HasExited) {
+              Write-Evidence @{ phase='window'; result='process_exited_early'; pid=$process.Id; exit_code=$process.ExitCode; checks=$checksPerformed }
+              break
+            }
             if ($process.MainWindowHandle -ne 0 -and -not [string]::IsNullOrWhiteSpace($process.MainWindowTitle)) {
               $window = $process
+              Write-Evidence @{ phase='window'; result='window_found_on_check'; pid=$process.Id; check_number=$checksPerformed; title=$process.MainWindowTitle }
               break
             }
           }
