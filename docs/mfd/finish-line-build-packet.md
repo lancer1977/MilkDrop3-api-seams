@@ -20,8 +20,8 @@ MilkDrop3 visualizer fork exposing a WM_COPYDATA API seam for stream automation.
 
 ## Current behavior
 
-- Integration branch: `main`; protected branch: `main`.
-- Only the catalog-manifest workflow exists; no build or test CI. No dev branch, so PRs target main.
+- Integration branch: `dev`; protected branch: `main`.
+- Only the catalog-manifest workflow exists; no build or test CI. dev was created on 2026-11-01 from the main head; PRs now target dev and main stays protected and default.
 
 ## Behavior map
 
@@ -39,14 +39,14 @@ Unchanged. Any change to auth, secrets, workflows, deploy or infrastructure path
 
 | Requirement | Scenario | Validation | Expected evidence |
 | --- | --- | --- | --- |
-| unit tier | PR to `main` | `None in CI` | Not in CI |
-| integration tier | PR to `main` | `tools/send-milkdrop-copydata.ps1 against a running MilkDrop3 (manual, Windows)` | Not in CI |
-| automation tier | PR to `main` | `Catalog Manifest workflow` | Catalog Manifest |
+| unit tier | PR to `dev` | `None in CI` | Not in CI |
+| integration tier | PR to `dev` | `tools/send-milkdrop-copydata.ps1 against a running MilkDrop3 (manual, Windows)` | Not in CI |
+| automation tier | PR to `dev` | `Catalog Manifest workflow` | Catalog Manifest |
 
 ## Per-project merge policy
 
 - Required checks: `Catalog Manifest`
-- Integration branch: main
+- Integration branch: dev
 - Protected branch: main
 
 | Test tier | Command | Required | CI job name |
@@ -55,7 +55,7 @@ Unchanged. Any change to auth, secrets, workflows, deploy or infrastructure path
 | Integration | `tools/send-milkdrop-copydata.ps1 against a running MilkDrop3 (manual, Windows)` | No | None |
 | Automation | `Catalog Manifest workflow` | Yes | Catalog Manifest |
 
-Checks observed in workflow files on `main`:
+Checks observed in workflow files on `dev`:
 
 - `Catalog Manifest` from catalog-manifest.yml (reusable workflow on every pull_request; exact check-run name not confirmed)
 
@@ -85,7 +85,6 @@ Docs-only. Roll back by reverting the packet commit. Deploys, if any, are out of
 
 | Decision | Options | Recommendation |
 | --- | --- | --- |
-| Create a dev integration branch? | Create dev / stay on main | Create dev to match portfolio policy (open) |
 
 ## Approval
 
@@ -104,7 +103,7 @@ Docs-only. Roll back by reverting the packet commit. Deploys, if any, are out of
 
 ## Release controls and closeout evidence
 
-- Target branch: `main`
+- Target branch: `dev`
 - Pull request: Pending
 - Required reviewers: lancer1977
 - CI and validation evidence: Pending

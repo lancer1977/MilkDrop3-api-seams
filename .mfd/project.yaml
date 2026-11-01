@@ -1,6 +1,6 @@
 schema_version: 2
 merge_policy:
-  integration_branch: main
+  integration_branch: dev
   protected_branch: main
   required_checks:
     - "Catalog Manifest"
@@ -13,7 +13,7 @@ merge_policy:
       required_for: []
     automation:
       command: "Catalog Manifest workflow"
-      required_for: [main]
+      required_for: [dev, main]
   escalate_paths:
     - "**/*secret*"
     - "**/*credential*"
