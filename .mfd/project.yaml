@@ -1,0 +1,26 @@
+schema_version: 2
+merge_policy:
+  integration_branch: dev
+  protected_branch: main
+  required_checks:
+    - "Catalog Manifest"
+  test_tiers:
+    unit:
+      command: "None in CI"
+      required_for: []
+    integration:
+      command: "tools/send-milkdrop-copydata.ps1 against a running MilkDrop3 (manual, Windows)"
+      required_for: []
+    automation:
+      command: "Catalog Manifest workflow"
+      required_for: [dev, main]
+  escalate_paths:
+    - "**/*secret*"
+    - "**/*credential*"
+    - "**/*auth*"
+    - ".github/workflows/**"
+    - "**/*infra*"
+    - "**/*deploy*"
+  escalate_labels:
+    - decision
+    - bug
