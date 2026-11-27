@@ -15,4 +15,6 @@ permissions:
 
 jobs:
   validate:
-    uses: lancer1977/dev-forge/.github/workflows/catalog-manifest-validate-reusable.yml@main
+    uses: lancer1977/workstation-kit/.github/workflows/catalog-manifest-validate-reusable.yml@b841a32496652154a86ae1010beae3d01b2884c8
+    with:
+      runner: '["ubuntu-latest"]'
